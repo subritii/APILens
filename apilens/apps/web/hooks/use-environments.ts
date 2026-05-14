@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, startTransition } from 'react'
 
 export interface EnvVariable {
   key: string
@@ -37,8 +37,10 @@ export function useEnvironments() {
   const [activeEnvId, setActiveEnvIdState] = useState<string | null>(null)
 
   useEffect(() => {
-    setEnvironments(load())
-    setActiveEnvIdState(localStorage.getItem(ACTIVE_KEY))
+    startTransition(() => {
+      setEnvironments(load())
+      setActiveEnvIdState(localStorage.getItem(ACTIVE_KEY))
+    })
   }, [])
 
   function setActiveEnvId(id: string | null) {

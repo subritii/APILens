@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, startTransition } from 'react'
 
 export interface SavedRequest {
   id: string
@@ -38,7 +38,9 @@ export function useCollections() {
   // localStorage is only available in the browser, not during SSR.
   // Reading it in useEffect ensures we never run this on the server.
   useEffect(() => {
-    setCollections(load())
+    startTransition(() => {
+      setCollections(load())
+    })
   }, [])
 
   function createCollection(name: string): Collection {
