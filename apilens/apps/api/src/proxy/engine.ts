@@ -43,6 +43,7 @@ export async function forwardRequest(req: ProxyRequest): Promise<ProxyResult> {
   const fetchOptions: RequestInit = {
     method: req.method.toUpperCase(),
     headers: forwardedHeaders,
+    signal: AbortSignal.timeout(30_000),
     ...(hasBody && { body: JSON.stringify(req.body) }),
   }
 

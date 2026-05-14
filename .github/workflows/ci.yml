@@ -8,7 +8,7 @@ on:
 
 jobs:
   ci:
-    name: Type Check & Lint
+    name: Test, Type Check & Lint
     runs-on: ubuntu-latest
 
     steps:
@@ -27,6 +27,10 @@ jobs:
       - name: Install dependencies
         working-directory: apilens
         run: pnpm install --frozen-lockfile
+
+      - name: Run tests
+        working-directory: apilens
+        run: pnpm --filter @apilens/api test
 
       - name: Type check (build)
         working-directory: apilens
