@@ -1,0 +1,33 @@
+# Headers tab fixes
+
+In the RequestBuilder headers tab, make these changes:
+
+## 1. Add column header labels
+Add a row above the header rows with small muted uppercase labels:
+empty column for checkbox, then "Header name", "Value", empty column for delete button.
+
+## 2. Auto Content-Type row
+Add a dimmed read-only row at the bottom of user-defined rows showing:
+- Header name: Content-Type
+- Value: application/json
+- Small "auto" badge next to the value
+- Checkbox unchecked and disabled
+- No delete button
+- Inputs are read-only and non-editable
+Place this row above the ghost empty row.
+
+## 3. Filtering autocomplete
+The header name dropdown should filter as the user types.
+If the user typed "x-" only show options starting with "x-".
+Dismiss on Escape, select on Enter or click.
+Show a "no matches" message if nothing fits.
+
+## 4. Value autocomplete by header name
+When a known header name is selected, the value field should suggest common values:
+- Content-Type: application/json, application/x-www-form-urlencoded, multipart/form-data
+- Accept: application/json, */*
+- Authorization: Bearer, Basic
+
+## 5. Dropdown positioning
+The dropdown must appear directly below the input it belongs to.
+Give it a max-height with scroll if the list is long.
