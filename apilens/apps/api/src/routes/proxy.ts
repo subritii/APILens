@@ -68,7 +68,7 @@ router.post('/request', async (req: Request, res: Response) => {
         layer1Flags: allWarnings.filter(w => ['SSRF', 'CONTENT_TYPE', 'SPEC_'].some(p => w.code.startsWith(p))) as object[],
         layer2Flags: heuristicHints as object[],
       },
-    }).catch(err => {
+    }).catch((err: Error) => {
       console.error('[History] Failed to persist:', err.message)
       return null
     })
