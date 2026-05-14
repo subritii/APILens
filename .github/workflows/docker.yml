@@ -1,0 +1,48 @@
+name: Docker
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - apilens/docker-compose.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - apilens/docker-compose.yml
+
+jobs:
+  docker-validate:
+    name: Validate Docker Compose
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate compose file
+        working-directory: apilens
+        run: docker compose config --quiet
+
+      - name: Start services
+        working-directory: apilens
+        run: docker compose up -d
+
+      - name: Wait for Postgres to be healthy
+        run: |
+          for i in $(seq 1 15); do
+            docker compose -f apilens/docker-compose.yml exec -T postgres pg_isready -U apilens && break
+            echo "Waiting for postgres... ($i/15)"
+            sleep 2
+          done
+
+      - name: Wait for Redis to be healthy
+        run: |
+          for i in $(seq 1 15); do
+            docker compose -f apilens/docker-compose.yml exec -T redis redis-cli ping | grep -q PONG && break
+            echo "Waiting for redis... ($i/15)"
+            sleep 2
+          done
+
+      - name: Tear down
+        if: always()
+        working-directory: apilens
+        run: docker compose down -v
