@@ -1,0 +1,76 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id          String       @id @default(cuid())
+  email       String       @unique
+  password    String
+  teamId      String?
+  team        Team?        @relation(fields: [teamId], references: [id])
+  collections Collection[]
+  createdAt   DateTime     @default(now())
+}
+
+model Team {
+  id        String           @id @default(cuid())
+  name      String
+  members   User[]
+  knowledge KnowledgeEntry[]
+}
+
+model Collection {
+  id       String    @id @default(cuid())
+  name     String
+  userId   String
+  user     User      @relation(fields: [userId], references: [id])
+  requests Request[]
+  specUrl  String?
+}
+
+model Request {
+  id           String          @id @default(cuid())
+  collectionId String
+  collection   Collection      @relation(fields: [collectionId], references: [id])
+  name         String
+  method       String
+  url          String
+  headers      Json
+  body         Json?
+  history      RequestHistory[]
+}
+
+model RequestHistory {
+  id           String   @id @default(cuid())
+  requestId    String?
+  request      Request? @relation(fields: [requestId], references: [id])
+  method       String
+  url          String
+  sentHeaders  Json
+  sentBody     Json?
+  statusCode   Int
+  responseBody Json
+  responseTime Int
+  layer1Flags  Json?
+  layer2Flags  Json?
+  layer3Result Json?
+  createdAt    DateTime @default(now())
+}
+
+model KnowledgeEntry {
+  id            String   @id @default(cuid())
+  teamId        String
+  team          Team     @relation(fields: [teamId], references: [id])
+  endpoint      String
+  statusCode    Int
+  explanation   String
+  fixSuggestion String
+  createdBy     String
+  hitCount      Int      @default(1)
+  createdAt     DateTime @default(now())
+}
