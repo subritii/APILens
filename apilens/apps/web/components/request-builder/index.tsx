@@ -188,8 +188,6 @@ export function RequestBuilder({
     // Build header map: auto → auth → custom (custom wins on conflict)
     const headerMap: Record<string, string> = {}
 
-    // Auto-add Content-Type when there's a JSON body — no manual selection needed
-    if (parsedBody !== undefined) headerMap['Content-Type'] = 'application/json'
 
     if (authType === 'bearer' && authToken.trim()) {
       headerMap['Authorization'] = `Bearer ${authToken.trim()}`
@@ -503,15 +501,24 @@ export function RequestBuilder({
 
                 {realRows.map((row, i) => renderRow(row, i))}
 
-                {showAutoCtRow && (
-                  <div className="flex items-center gap-2 opacity-40">
-                    <input type="checkbox" disabled className="h-3.5 w-3.5 shrink-0" />
-                    <input readOnly value="Content-Type" className={`w-2/5 ${inputCls} cursor-default`} />
-                    <div className="flex flex-1 items-center gap-1.5">
-                      <input readOnly value="application/json" className={`flex-1 ${inputCls} cursor-default`} />
-                      <span className="shrink-0 rounded bg-zinc-200 px-1.5 py-0.5 text-[10px] font-medium text-zinc-500 dark:bg-zinc-700 dark:text-zinc-400">auto</span>
-                    </div>
-                    <div className="w-6 shrink-0" />
+                {showAutoCtRow && !headers.some(h => h.key.toLowerCase() === 'content-type' && h.key.trim()) && (
+                  <div className="flex items-center gap-2 rounded border border-dashed border-amber-300 bg-amber-50 px-2 py-1 dark:border-amber-800 dark:bg-amber-950">
+                    <span className="text-[10px] text-amber-700 dark:text-amber-400 flex-1">
+                      No <code className="font-mono">Content-Type</code> set — servers may reject or misparse this body.
+                    </span>
+                    <button
+                      type="button"
+                      onMouseDown={e => {
+                        e.preventDefault()
+                        setHeaders(prev => {
+                          const withoutGhost = prev.slice(0, -1)
+                          return [...withoutGhost, { key: 'Content-Type', value: 'application/json' }, { key: '', value: '' }]
+                        })
+                      }}
+                      className="shrink-0 rounded bg-amber-600 px-2 py-0.5 text-[10px] font-medium text-white hover:bg-amber-700"
+                    >
+                      Add
+                    </button>
                   </div>
                 )}
 

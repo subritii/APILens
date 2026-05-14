@@ -36,24 +36,20 @@ function AIPanel({ ai, onExplain, explaining, isError }: {
     )
   }
 
-  // For 2xx responses: show the Explain button. For 4xx/5xx it was auto-triggered
-  // (if it's null on an error response, the API key may not be set).
-  if (!isError) {
-    return (
-      <div className="flex items-center justify-between rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 dark:border-zinc-800 dark:bg-zinc-900">
-        <p className="text-xs text-zinc-500">Want to understand this response?</p>
-        <button
-          onClick={onExplain}
-          disabled={explaining}
-          className="rounded bg-zinc-900 px-3 py-1 text-xs font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
-        >
-          {explaining ? 'Asking Claude…' : 'Explain'}
-        </button>
-      </div>
-    )
-  }
-
-  return null
+  return (
+    <div className="flex items-center justify-between rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 dark:border-zinc-800 dark:bg-zinc-900">
+      <p className="text-xs text-zinc-500">
+        {isError ? 'AI explanation unavailable — try manually?' : 'Want to understand this response?'}
+      </p>
+      <button
+        onClick={onExplain}
+        disabled={explaining}
+        className="rounded bg-zinc-900 px-3 py-1 text-xs font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
+      >
+        {explaining ? 'Asking Claude…' : 'Explain'}
+      </button>
+    </div>
+  )
 }
 
 export function ResponseViewer({ result, onExplain, explaining }: {
