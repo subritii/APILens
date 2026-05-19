@@ -82,18 +82,29 @@ export async function validateRequest(req: ValidatableRequest): Promise<Validati
     }
   }
 
-  // 4. Missing Content-Type on body requests
+  // 4. Content-Type checks on body requests
   const method = req.method.toUpperCase()
   const hasBody = req.body !== undefined && !['GET', 'HEAD'].includes(method)
   if (hasBody) {
     const ct = Object.entries(req.headers).find(([k]) => k.toLowerCase() === 'content-type')?.[1]
-    if (!ct) {
+    if (ct?.includes('application/json') && typeof req.body === 'string') {
+      try {
+        JSON.parse(req.body)
+      } catch {
+        issues.push({
+          code: 'INVALID_JSON_BODY',
+          severity: 'error',
+          message: 'Content-Type is application/json but the body is not valid JSON. Fix the syntax before sending.',
+        })
+      }
+    } else if (ct && !ct.includes('application/json') && !ct.includes('multipart') && !ct.includes('x-www-form-urlencoded')) {
       issues.push({
-        code: 'MISSING_CONTENT_TYPE',
+        code: 'CONTENT_TYPE_MISMATCH',
         severity: 'warning',
-        message: `${method} request has a body but no Content-Type header. The server may reject or misinterpret the request.`,
+        message: `Content-Type is "${ct}" but the body is JSON. The server may reject or misparse it — consider using application/json.`,
       })
     }
+    // No Content-Type: engine injects application/json automatically.
   }
 
   return issues

@@ -1,33 +1,59 @@
-# Headers tab fixes
+This is a really clear vision. The core insight is: **Postman shows you the envelope. APILens should show you the X-ray.**
 
-In the RequestBuilder headers tab, make these changes:
+Let me help you articulate this precisely so you can give it as a complete spec to Claude Code.
 
-## 1. Add column header labels
-Add a row above the header rows with small muted uppercase labels:
-empty column for checkbox, then "Header name", "Value", empty column for delete button.
+---
 
-## 2. Auto Content-Type row
-Add a dimmed read-only row at the bottom of user-defined rows showing:
-- Header name: Content-Type
-- Value: application/json
-- Small "auto" badge next to the value
-- Checkbox unchecked and disabled
-- No delete button
-- Inputs are read-only and non-editable
-Place this row above the ghost empty row.
+**The mental model shift to nail in your prompt:**
 
-## 3. Filtering autocomplete
-The header name dropdown should filter as the user types.
-If the user typed "x-" only show options starting with "x-".
-Dismiss on Escape, select on Enter or click.
-Show a "no matches" message if nothing fits.
+Right now the UI is output-first — you see the response, and analysis is a reaction to it. What you're describing is **pipeline-first** — the user sees the request travel through three distinct processing stages, and the response is the final output of that pipeline, not the main event.
 
-## 4. Value autocomplete by header name
-When a known header name is selected, the value field should suggest common values:
-- Content-Type: application/json, application/x-www-form-urlencoded, multipart/form-data
-- Accept: application/json, */*
-- Authorization: Bearer, Basic
+Think of it like an airport security scanner. You don't just see "approved" or "denied." You see the conveyor belt, the X-ray image, the officer's check, and then the outcome. That's what APILens should feel like.
 
-## 5. Dropdown positioning
-The dropdown must appear directly below the input it belongs to.
-Give it a max-height with scroll if the list is long.
+---
+
+Here's the complete spec you can paste directly into Claude Code:
+
+---
+
+**Redesign the post-Send result panel in APILens. The goal is to make the three-layer analysis pipeline visible and primary, with the HTTP response as a subordinate output.**
+
+**Current behaviour (replace this):**
+After Send, the UI shows a status code, response time, and a JSON body viewer. Analysis results (Layer 1 warnings, Layer 2 heuristics, Layer 3 AI) appear as incidental cards above or around the response. The response feels like the main event.
+
+**New behaviour (implement this):**
+
+The entire area below the request builder should become a "Pipeline Result" panel. It has two sections, always rendered in this order: Analysis Pipeline (top), then HTTP Response (bottom). A thin labelled divider separates them.
+
+**Section 1 — Analysis Pipeline**
+
+Three layer cards always render after every request, regardless of whether the request succeeded, failed, or was blocked. They are never hidden. Each card has the same anatomy:
+
+Each card has a header row containing: a layer number pill ("L1", "L2", "L3"), a layer name ("Validation", "Heuristics", "AI Triage"), an icon (shield for L1, radar for L2, sparkles for L3), a status badge on the far right, and a processing time in small muted text (e.g. "~0ms", "~1ms", "~3.2s").
+
+The status badge has four states: "Pass" (green) when the layer ran and found nothing, "Warning" (amber) when the layer found something non-blocking, "Blocked" (red) when the layer stopped the request, "Skipped" (gray) when the layer was not applicable (e.g. Layer 2 skipped on first request with no baseline data, Layer 3 skipped because status was 200 and user didn't click Explain).
+
+The card body shows what the layer actually did — not just what it found, but what it checked. This is the key difference from the current design.
+
+Layer 1 body should always list the rules it ran, even when they all passed. Format: a checklist with pass/fail icons. Rules: schema validation, required headers present, SSRF protection check, content-type consistency, JSON body validity. Each rule shows its name and either a green checkmark or a red/amber flag with the specific finding. When a rule fails, show the rule name as a code pill (e.g. `MISSING_CONTENT_TYPE`), the human explanation, and a suggested fix inline.
+
+Layer 2 body should show the session context it used: number of previous requests to this endpoint, rolling average latency, current streak of same status codes. Format: a small data table — "Endpoint baseline: 10 requests, avg 98ms", "This request: 241ms (+2.4× avg)", "Auth streak: 1 consecutive 200 (reset)". When a heuristic fires, highlight that row in amber. When there's no baseline yet, show "Insufficient data — 5 requests needed to establish baseline" in muted text, not an empty card.
+
+Layer 3 body has two states. Default (no explanation requested): show a single muted line — "No issues detected — explanation not triggered. Click Explain to analyse this response." with an Explain button. Active (after Explain clicked or auto-triggered on 4xx/5xx): show the full AI explanation with the response meaning, root cause if applicable, and concrete fix. The explanation should be structured: a "What happened" paragraph, a "Why" paragraph, and a "Fix" section with code-formatted suggestions. Show "from cache" or "fresh · 3.1s" and a "Save to team knowledge" button in the card footer.
+
+**Section 2 — HTTP Response**
+
+Below a divider labelled "Response", show the existing response viewer: status code (large, colour-coded), response time, a "Why" one-line summary strip, then Body and Headers tabs with the JSON viewer. The status code area should gain a contextual latency badge ("fast", "normal", "slow +2.4×") pulled from Layer 2 data.
+
+**Layout and visual treatment:**
+
+The three layer cards should use a consistent left border colour to identify their layer: red/pink for L1 (security/validation), amber for L2 (heuristics), purple for L3 (AI). This makes the three layers scannable at a glance even when collapsed. Cards should be collapsible — clicking the header toggles the body. Default state: all expanded. After the user has used the app a few times, they should be able to collapse layers they trust.
+
+Add a "Pipeline summary" strip at the very top of the result panel, before the three cards. One horizontal row showing: L1 status dot → L2 status dot → L3 status dot, with a single summary sentence: "All checks passed · 241ms · no issues" or "L1 blocked · request never sent" or "L2 flagged · L3 explained". This is the TL;DR that a developer reads in one second.
+
+**What this achieves:**
+The app no longer looks like Postman with extra warnings. It looks like a debugging pipeline where the developer can see exactly what each layer checked, what it found, and why it made its decision. The response is the outcome of that pipeline — not the product.
+
+---
+
+That spec is complete enough for Claude Code to implement end-to-end. The key phrases that will keep it on track: "always render after every request regardless of outcome", "show what each layer checked, not just what it found", and "response is subordinate to the pipeline." Those three constraints define the entire design direction and prevent it from drifting back toward the Postman pattern.

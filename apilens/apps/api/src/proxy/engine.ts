@@ -40,11 +40,20 @@ export async function forwardRequest(req: ProxyRequest): Promise<ProxyResult> {
 
   const hasBody = req.body !== undefined && !['GET', 'HEAD'].includes(req.method.toUpperCase())
 
+  // If the user didn't set Content-Type and there is a body, default to application/json.
+  // Every HTTP client does this — it is not opinionated, it is just correct.
+  const hasContentType = Object.keys(forwardedHeaders).some(k => k.toLowerCase() === 'content-type')
+  if (hasBody && !hasContentType) {
+    forwardedHeaders['Content-Type'] = 'application/json'
+  }
+
   const fetchOptions: RequestInit = {
     method: req.method.toUpperCase(),
     headers: forwardedHeaders,
     signal: AbortSignal.timeout(30_000),
-    ...(hasBody && { body: JSON.stringify(req.body) }),
+    // Buffer prevents Node fetch from overriding Content-Type with text/plain.
+    // String bodies (form-encoded, multipart) are forwarded as-is; objects are JSON-stringified.
+    ...(hasBody && { body: Buffer.from(typeof req.body === 'string' ? req.body : JSON.stringify(req.body)) }),
   }
 
   const start = Date.now()

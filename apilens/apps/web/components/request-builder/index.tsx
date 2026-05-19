@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { ResponseViewer } from '@/components/response-viewer'
+import { PipelineResult } from '@/components/pipeline-result'
 import type { Collection, SavedRequest } from '@/hooks/use-collections'
 import type { Environment } from '@/hooks/use-environments'
 
@@ -83,9 +83,13 @@ export interface ProxyResult {
   headers: Record<string, string>
   body: unknown
   responseTime: number
-  warnings: ValidationIssue[]
+  layer1Flags: ValidationIssue[]
+  layer2Flags: ValidationIssue[]
   historyId: string | null
   aiExplanation: AIExplanation | null
+  autoInjectedContentType: boolean
+  blocked?: boolean
+  bodyFormat?: 'json' | 'form' | 'multipart' | 'none'
 }
 
 interface HeaderRow { key: string; value: string; enabled?: boolean }
@@ -140,6 +144,7 @@ export function RequestBuilder({
   const [error, setError] = useState('')
   const [result, setResult] = useState<ProxyResult | null>(null)
   const [explaining, setExplaining] = useState(false)
+  const [explainError, setExplainError] = useState('')
 
   const [saving, setSaving] = useState(false)
   const [saveName, setSaveName] = useState('')
@@ -173,22 +178,10 @@ export function RequestBuilder({
   async function send() {
     if (!url.trim()) { setError('URL is required.'); return }
 
-    let parsedBody: unknown
-    if (body.trim() && !['GET', 'HEAD'].includes(method)) {
-      try {
-        parsedBody = JSON.parse(body)
-      } catch {
-        setError('Request body is not valid JSON.')
-        return
-      }
-    }
-
     const resolvedUrl = interpolate(url.trim(), activeEnv)
 
-    // Build header map: auto → auth → custom (custom wins on conflict)
+    // Build header map first — needed for Content-Type checks below.
     const headerMap: Record<string, string> = {}
-
-
     if (authType === 'bearer' && authToken.trim()) {
       headerMap['Authorization'] = `Bearer ${authToken.trim()}`
     } else if (authType === 'basic') {
@@ -196,14 +189,51 @@ export function RequestBuilder({
     } else if (authType === 'apikey' && authToken.trim() && apiKeyHeader.trim()) {
       headerMap[apiKeyHeader.trim()] = authToken.trim()
     }
-
     for (const h of headers.filter(h => h.key.trim() && h.enabled !== false)) {
       headerMap[interpolate(h.key.trim(), activeEnv)] = interpolate(h.value.trim(), activeEnv)
     }
 
-    setLoading(true)
+    // Clear previous result immediately so early returns never leave stale pipeline state visible.
     setError('')
     setResult(null)
+    setExplainError('')
+
+    const effectiveCt = (Object.entries(headerMap)
+      .find(([k]) => k.toLowerCase() === 'content-type')?.[1] ?? '').toLowerCase()
+    const isFormBody = effectiveCt.includes('x-www-form-urlencoded') || effectiveCt.includes('multipart/form-data')
+
+    const hasBodyMethod = !['GET', 'HEAD'].includes(method)
+    const bodyFormat: ProxyResult['bodyFormat'] =
+      !hasBodyMethod || !body.trim() ? 'none'
+      : effectiveCt.includes('multipart') ? 'multipart'
+      : effectiveCt.includes('x-www-form-urlencoded') ? 'form'
+      : 'json'
+
+    let parsedBody: unknown
+    if (body.trim() && hasBodyMethod) {
+      if (isFormBody) {
+        // Form-encoded and multipart bodies are raw strings — no JSON parsing.
+        parsedBody = body.trim()
+      } else {
+        // No CT or application/json → engine will auto-inject JSON, so validate now.
+        try {
+          parsedBody = JSON.parse(body)
+        } catch {
+          setResult({
+            statusCode: 0, headers: {}, body: null, responseTime: 0,
+            layer1Flags: [{ code: 'INVALID_JSON_BODY', severity: 'error', message: 'Request body is not valid JSON. Fix the syntax before sending.' }],
+            layer2Flags: [], historyId: null, aiExplanation: null,
+            autoInjectedContentType: false, blocked: true, bodyFormat: 'json',
+          })
+          return
+        }
+      }
+    }
+
+    const hasContentType = Object.keys(headerMap).some(k => k.toLowerCase() === 'content-type')
+    const autoInjectedContentType = parsedBody !== undefined && !hasContentType
+
+    setLoading(true)
 
     try {
       const res = await fetch(
@@ -216,10 +246,14 @@ export function RequestBuilder({
       )
       const data = await res.json()
       if (!res.ok) {
-        setError(data.error ?? 'Request blocked by validation.')
+        if (data.layer1Flags) {
+          setResult({ statusCode: res.status, headers: {}, body: null, responseTime: 0, layer1Flags: data.layer1Flags, layer2Flags: data.layer2Flags ?? [], historyId: null, aiExplanation: null, autoInjectedContentType: false, blocked: true })
+        } else {
+          setError(data.error ?? 'Request blocked by validation.')
+        }
         return
       }
-      setResult(data)
+      setResult({ ...data, autoInjectedContentType, bodyFormat })
     } catch {
       setError('Could not reach the APILens backend. Is it running on port 4000?')
     } finally {
@@ -228,8 +262,12 @@ export function RequestBuilder({
   }
 
   async function explain() {
-    if (!result?.historyId) return
+    if (!result?.historyId) {
+      setExplainError('AI explanation requires the database to be running. Start Docker and try again.')
+      return
+    }
     setExplaining(true)
+    setExplainError('')
     try {
       const res = await fetch(
         `${process.env.NEXT_PUBLIC_API_URL}/api/proxy/explain`,
@@ -242,9 +280,11 @@ export function RequestBuilder({
       const data = await res.json()
       if (res.ok && data.aiExplanation) {
         setResult(prev => prev ? { ...prev, aiExplanation: data.aiExplanation } : prev)
+      } else {
+        setExplainError(data.error ?? 'AI explanation failed.')
       }
     } catch {
-      // silently fail — the button is an enhancement, not a requirement
+      setExplainError('Could not reach the APILens backend.')
     } finally {
       setExplaining(false)
     }
@@ -316,7 +356,7 @@ export function RequestBuilder({
       </div>
 
       {hasVariables && activeEnv && (
-        <div className="flex items-center gap-1.5 text-xs text-zinc-400">
+        <div className="flex items-center gap-2 text-xs text-zinc-400">
           <span>→</span>
           <span className={`font-mono ${hasUnresolved ? 'text-orange-500' : 'text-zinc-500 dark:text-zinc-400'}`}>
             {resolvedUrl}
@@ -328,7 +368,7 @@ export function RequestBuilder({
       {saving && (
         <form
           onSubmit={submitSave}
-          className="flex gap-2 rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2.5 dark:border-zinc-800 dark:bg-zinc-900"
+          className="flex gap-2 rounded-md border border-zinc-200 bg-zinc-50 px-4 py-2 dark:border-zinc-800 dark:bg-zinc-900"
         >
           <input
             autoFocus
@@ -382,7 +422,7 @@ export function RequestBuilder({
           ))}
         </div>
 
-        <div className="p-3">
+        <div className="p-4">
 
           {/* ── Headers tab ── */}
           {requestTab === 'headers' && (() => {
@@ -490,7 +530,7 @@ export function RequestBuilder({
             }
 
             return (
-              <div className="flex flex-col gap-1.5">
+              <div className="flex flex-col gap-2">
                 {/* Column labels */}
                 <div className="flex items-center gap-2 pb-0.5">
                   <div className="h-3.5 w-3.5 shrink-0" />
@@ -501,26 +541,46 @@ export function RequestBuilder({
 
                 {realRows.map((row, i) => renderRow(row, i))}
 
-                {showAutoCtRow && !headers.some(h => h.key.toLowerCase() === 'content-type' && h.key.trim()) && (
-                  <div className="flex items-center gap-2 rounded border border-dashed border-amber-300 bg-amber-50 px-2 py-1 dark:border-amber-800 dark:bg-amber-950">
-                    <span className="text-[10px] text-amber-700 dark:text-amber-400 flex-1">
-                      No <code className="font-mono">Content-Type</code> set — servers may reject or misparse this body.
-                    </span>
-                    <button
-                      type="button"
-                      onMouseDown={e => {
-                        e.preventDefault()
-                        setHeaders(prev => {
-                          const withoutGhost = prev.slice(0, -1)
-                          return [...withoutGhost, { key: 'Content-Type', value: 'application/json' }, { key: '', value: '' }]
-                        })
-                      }}
-                      className="shrink-0 rounded bg-amber-600 px-2 py-0.5 text-[10px] font-medium text-white hover:bg-amber-700"
-                    >
-                      Add
-                    </button>
-                  </div>
-                )}
+                {(() => {
+                  const noCtHeader = !headers.some(h => h.key.toLowerCase() === 'content-type' && h.key.trim())
+                  const addCtHeader = () => setHeaders(prev => {
+                    const withoutGhost = prev.slice(0, -1)
+                    return [...withoutGhost, { key: 'Content-Type', value: 'application/json' }, { key: '', value: '' }]
+                  })
+                  if (result?.autoInjectedContentType && noCtHeader) {
+                    return (
+                      <div className="flex items-center gap-2 rounded border border-blue-200 bg-blue-50 px-2 py-1.5 dark:border-blue-900 dark:bg-blue-950">
+                        <span className="flex-1 text-[10px] text-blue-700 dark:text-blue-300">
+                          <code className="font-mono">Content-Type: application/json</code> was added automatically. Add it to your headers to make this permanent.
+                        </span>
+                        <button
+                          type="button"
+                          onMouseDown={e => { e.preventDefault(); addCtHeader() }}
+                          className="shrink-0 rounded bg-blue-600 px-2 py-0.5 text-[10px] font-medium text-white hover:bg-blue-700"
+                        >
+                          Add
+                        </button>
+                      </div>
+                    )
+                  }
+                  if (showAutoCtRow && noCtHeader) {
+                    return (
+                      <div className="flex items-center gap-2 rounded border border-dashed border-amber-300 bg-amber-50 px-2 py-1 dark:border-amber-800 dark:bg-amber-950">
+                        <span className="flex-1 text-[10px] text-amber-700 dark:text-amber-400">
+                          No <code className="font-mono">Content-Type</code> set — servers may reject or misparse this body.
+                        </span>
+                        <button
+                          type="button"
+                          onMouseDown={e => { e.preventDefault(); addCtHeader() }}
+                          className="shrink-0 rounded bg-amber-600 px-2 py-0.5 text-[10px] font-medium text-white hover:bg-amber-700"
+                        >
+                          Add
+                        </button>
+                      </div>
+                    )
+                  }
+                  return null
+                })()}
 
                 {renderRow(ghostRow, ghostIndex)}
               </div>
@@ -529,7 +589,7 @@ export function RequestBuilder({
 
           {/* ── Auth tab ── */}
           {requestTab === 'auth' && (
-            <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-4">
               <div className="flex items-center gap-3">
                 <span className="w-28 shrink-0 text-xs text-zinc-500">Auth type</span>
                 <select
@@ -545,7 +605,7 @@ export function RequestBuilder({
               </div>
 
               {authType === 'bearer' && (
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-4">
                   <span className="w-28 shrink-0 text-xs text-zinc-500">Token</span>
                   <div className="relative flex-1">
                     <input
@@ -568,7 +628,7 @@ export function RequestBuilder({
 
               {authType === 'basic' && (
                 <>
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-4">
                     <span className="w-28 shrink-0 text-xs text-zinc-500">Username</span>
                     <input
                       value={authUser}
@@ -577,7 +637,7 @@ export function RequestBuilder({
                       className={`flex-1 ${inputCls}`}
                     />
                   </div>
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-4">
                     <span className="w-28 shrink-0 text-xs text-zinc-500">Password</span>
                     <div className="relative flex-1">
                       <input
@@ -601,7 +661,7 @@ export function RequestBuilder({
 
               {authType === 'apikey' && (
                 <>
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-4">
                     <span className="w-28 shrink-0 text-xs text-zinc-500">Header name</span>
                     <input
                       value={apiKeyHeader}
@@ -610,7 +670,7 @@ export function RequestBuilder({
                       className={`flex-1 ${inputCls}`}
                     />
                   </div>
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-4">
                     <span className="w-28 shrink-0 text-xs text-zinc-500">Value</span>
                     <div className="relative flex-1">
                       <input
@@ -654,7 +714,7 @@ export function RequestBuilder({
       </div>
 
       {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
-      {result && <ResponseViewer result={result} onExplain={explain} explaining={explaining} />}
+      {result && <PipelineResult result={result} onExplain={explain} explaining={explaining} explainError={explainError} />}
     </div>
   )
 }

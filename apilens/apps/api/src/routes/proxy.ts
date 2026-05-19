@@ -23,7 +23,7 @@ router.post('/request', async (req: Request, res: Response) => {
   const warnings = issues.filter(i => i.severity === 'warning')
 
   if (errors.length > 0) {
-    res.status(400).json({ error: errors[0].message, code: errors[0].code })
+    res.status(400).json({ error: errors[0].message, code: errors[0].code, layer1Flags: issues, layer2Flags: [], blocked: true })
     return
   }
 
@@ -31,10 +31,10 @@ router.post('/request', async (req: Request, res: Response) => {
   if (specKey) {
     const spec = getSpec(specKey)
     if (spec) {
-      const specIssues = validateRequestAgainstSpec(spec.doc, method, url, body)
+      const specIssues = validateRequestAgainstSpec(spec.doc, method, url, body, headers as Record<string, string>)
       const specErrors = specIssues.filter(i => i.severity === 'error')
       if (specErrors.length > 0) {
-        res.status(400).json({ error: specErrors[0].message, code: specErrors[0].code })
+        res.status(400).json({ error: specErrors[0].message, code: specErrors[0].code, layer1Flags: [...issues, ...specIssues], layer2Flags: [], blocked: true })
         return
       }
       warnings.push(...specIssues.filter(i => i.severity === 'warning'))
@@ -53,7 +53,9 @@ router.post('/request', async (req: Request, res: Response) => {
       ? validateResponseAgainstSpec(loadedSpec.doc, method, url, result.statusCode, result.body)
       : []
 
-    const allWarnings = [...warnings, ...result.warnings, ...heuristicHints, ...responseSpecIssues]
+    const layer1Flags = [...warnings, ...result.warnings, ...responseSpecIssues]
+    const layer2Flags = heuristicHints
+    const allWarnings = [...layer1Flags, ...layer2Flags]
 
     // Persist request history to Postgres (fire-and-forget — never blocks the response)
     const historyRow = await db.requestHistory.create({
@@ -65,8 +67,8 @@ router.post('/request', async (req: Request, res: Response) => {
         statusCode: result.statusCode,
         responseBody: result.body as object,
         responseTime: result.responseTime,
-        layer1Flags: allWarnings.filter(w => ['SSRF', 'CONTENT_TYPE', 'SPEC_'].some(p => w.code.startsWith(p))) as object[],
-        layer2Flags: heuristicHints as object[],
+        layer1Flags: layer1Flags as object[],
+        layer2Flags: layer2Flags as object[],
       },
     }).catch((err: Error) => {
       console.error('[History] Failed to persist:', err.message)
@@ -76,8 +78,8 @@ router.post('/request', async (req: Request, res: Response) => {
     // Layer 3: AI Triage — auto on 4xx/5xx, manual via triggerAI flag
     let aiExplanation = null
     if (historyRow && (result.statusCode >= 400 || triggerAI)) {
-      if (!process.env.ANTHROPIC_API_KEY) {
-        console.warn('[AI] ANTHROPIC_API_KEY is not set — skipping Layer 3')
+      if (!process.env.GROQ_API_KEY) {
+        console.warn('[AI] GROQ_API_KEY is not set — skipping Layer 3')
       } else {
         aiExplanation = await explainFailure({
           method,
@@ -94,9 +96,11 @@ router.post('/request', async (req: Request, res: Response) => {
       }
     }
 
+    const { warnings: _engineWarnings, ...proxyFields } = result
     res.json({
-      ...result,
-      warnings: allWarnings,
+      ...proxyFields,
+      layer1Flags,
+      layer2Flags,
       historyId: historyRow?.id ?? null,
       aiExplanation,
     })
@@ -105,7 +109,7 @@ router.post('/request', async (req: Request, res: Response) => {
   }
 })
 
-// Manual AI explain for a saved history row (used by the "Explain" button on 2xx responses)
+// Manual AI explain for a saved history row (used by the "Explain" button on 4xx/5xx responses)
 router.post('/explain', async (req: Request, res: Response) => {
   const { historyId } = req.body
 
@@ -120,8 +124,13 @@ router.post('/explain', async (req: Request, res: Response) => {
     return
   }
 
-  if (!process.env.ANTHROPIC_API_KEY) {
-    res.status(503).json({ error: 'ANTHROPIC_API_KEY is not configured on the server.' })
+  if (row.statusCode < 400) {
+    res.status(400).json({ error: 'AI triage is only available for failed requests (4xx/5xx).' })
+    return
+  }
+
+  if (!process.env.GROQ_API_KEY) {
+    res.status(503).json({ error: 'GROQ_API_KEY is not configured on the server.' })
     return
   }
 

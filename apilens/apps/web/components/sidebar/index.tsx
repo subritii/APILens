@@ -40,8 +40,8 @@ export function Sidebar({
 
   return (
     <aside className="flex h-full w-56 shrink-0 flex-col border-r border-zinc-200 dark:border-zinc-800">
-      <div className="flex items-center justify-between px-3 py-3 border-b border-zinc-200 dark:border-zinc-800">
-        <span className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
+      <div className="flex items-center justify-between px-4 py-2 border-b border-zinc-200 dark:border-zinc-800">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
           Collections
         </span>
         <button
@@ -68,7 +68,7 @@ export function Sidebar({
 
       <div className="flex-1 overflow-y-auto">
         {collections.length === 0 && (
-          <p className="px-3 py-4 text-xs text-zinc-400">No collections yet. Hit + to create one.</p>
+          <p className="px-3 py-4 text-[13px] text-zinc-400">No collections yet. Hit + to create one.</p>
         )}
 
         {collections.map(collection => (
@@ -100,10 +100,10 @@ function CollectionItem({
 
   return (
     <div>
-      <div className="group flex items-center justify-between px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-900">
+      <div className="group flex items-center justify-between px-4 py-2 hover:bg-zinc-100 dark:hover:bg-zinc-900">
         <button
           onClick={() => setOpen(v => !v)}
-          className="flex items-center gap-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300 flex-1 text-left"
+          className="flex items-center gap-1.5 text-[13px] font-medium text-zinc-700 dark:text-zinc-300 flex-1 text-left"
         >
           <span className="text-zinc-400">{open ? '▾' : '▸'}</span>
           {collection.name}
@@ -120,14 +120,14 @@ function CollectionItem({
       {open && collection.requests.map(req => (
         <div
           key={req.id}
-          className="group flex items-center justify-between pl-6 pr-3 py-1 hover:bg-zinc-100 dark:hover:bg-zinc-900 cursor-pointer"
+          className="group flex items-center justify-between pl-6 pr-4 py-2 hover:bg-zinc-100 dark:hover:bg-zinc-900 cursor-pointer"
           onClick={() => onLoadRequest(req)}
         >
           <div className="flex items-center gap-2 min-w-0">
             <span className={`shrink-0 font-mono text-xs font-semibold ${METHOD_COLORS[req.method] ?? 'text-zinc-500'}`}>
               {req.method}
             </span>
-            <span className="truncate text-xs text-zinc-600 dark:text-zinc-400">{req.name}</span>
+            <span className="truncate text-[13px] text-zinc-600 dark:text-zinc-400">{req.name}</span>
           </div>
           <button
             onClick={e => { e.stopPropagation(); onDeleteRequest(collection.id, req.id) }}

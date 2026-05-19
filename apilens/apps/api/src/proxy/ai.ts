@@ -1,9 +1,9 @@
-import Anthropic from '@anthropic-ai/sdk'
+import Groq from 'groq-sdk'
 import { Prisma } from '@prisma/client'
 import { db } from '../db'
 import type { ValidationIssue } from './validate'
 
-const client = new Anthropic()
+const client = new Groq()
 
 export interface AIExplanation {
   explanation: string
@@ -21,20 +21,45 @@ function normalizeEndpoint(method: string, url: string): string {
   }
 }
 
-async function findCached(endpoint: string, statusCode: number): Promise<AIExplanation | null> {
-  const row = await db.requestHistory.findFirst({
+// Derive a stable fingerprint from the error code/type in the response body.
+// Same endpoint + status code can have different root causes (api_key_expired vs invalid_api_key),
+// and the cache must not serve an explanation written for a different error.
+function errorSignature(responseBody: unknown): string {
+  if (typeof responseBody !== 'object' || responseBody === null) return ''
+  const b = responseBody as Record<string, unknown>
+  const err = b['error'] as Record<string, unknown> | undefined
+  const candidates = [
+    err?.['code'],      // Stripe: { error: { code: 'api_key_expired' } }
+    err?.['type'],      // Stripe: { error: { type: 'invalid_request_error' } }
+    b['code'],          // generic: { code: 'UNAUTHORIZED' }
+    b['error_code'],    // some APIs: { error_code: '...' }
+    b['type'],          // some APIs: { type: '...' }
+  ]
+  return candidates.filter(v => typeof v === 'string' && v).join(':')
+}
+
+async function findCached(endpoint: string, statusCode: number, sig: string): Promise<AIExplanation | null> {
+  // Fetch recent candidates — filter by signature in memory so no schema change is needed.
+  const rows = await db.requestHistory.findMany({
     where: {
       url: { contains: endpoint.split(' ')[1] ?? '' },
       statusCode,
       layer3Result: { not: Prisma.JsonNull },
     },
     orderBy: { createdAt: 'desc' },
+    take: 10,
+    select: { layer3Result: true, responseBody: true },
   })
 
-  if (!row?.layer3Result || typeof row.layer3Result !== 'object' || Array.isArray(row.layer3Result)) return null
-  const cached = row.layer3Result as Record<string, unknown>
-  if (typeof cached['explanation'] !== 'string' || typeof cached['fixSuggestion'] !== 'string') return null
-  return { explanation: cached['explanation'] as string, fixSuggestion: cached['fixSuggestion'] as string, source: 'cache' }
+  for (const row of rows) {
+    if (!row.layer3Result || typeof row.layer3Result !== 'object' || Array.isArray(row.layer3Result)) continue
+    // Reject cache hits where the stored response has a different error signature.
+    if (sig && errorSignature(row.responseBody) !== sig) continue
+    const cached = row.layer3Result as Record<string, unknown>
+    if (typeof cached['explanation'] !== 'string' || typeof cached['fixSuggestion'] !== 'string') continue
+    return { explanation: cached['explanation'], fixSuggestion: cached['fixSuggestion'], source: 'cache' }
+  }
+  return null
 }
 
 function buildPrompt(ctx: {
@@ -97,9 +122,11 @@ export async function explainFailure(ctx: {
   historyId: string
 }): Promise<AIExplanation> {
   const endpoint = normalizeEndpoint(ctx.method, ctx.url)
+  const sig = errorSignature(ctx.responseBody)
 
-  // Check if we already have a cached explanation for the same endpoint + status code
-  const cached = await findCached(endpoint, ctx.statusCode)
+  // Cache key: endpoint + status code + error signature (code/type from response body).
+  // Without the signature, api_key_expired and invalid_api_key would share the same cache entry.
+  const cached = await findCached(endpoint, ctx.statusCode, sig)
   if (cached) {
     // Still update this history row to point to the cached result
     await db.requestHistory.update({
@@ -119,14 +146,16 @@ export async function explainFailure(ctx: {
 
   const prompt = buildPrompt({ ...ctx, recentHistory })
 
-  const message = await client.messages.create({
-    model: 'claude-sonnet-4-6',
+  const message = await client.chat.completions.create({
+    model: 'llama-3.3-70b-versatile',
     max_tokens: 512,
-    system: 'You are an expert API debugger. Always respond with valid JSON only.',
-    messages: [{ role: 'user', content: prompt }],
+    messages: [
+      { role: 'system', content: 'You are an expert API debugger. Always respond with valid JSON only.' },
+      { role: 'user', content: prompt },
+    ],
   })
 
-  const raw = (message.content[0] as { type: string; text?: string }).text ?? ''
+  const raw = message.choices[0]?.message?.content ?? ''
 
   let parsed: { explanation?: string; fixSuggestion?: string } = {}
   try {

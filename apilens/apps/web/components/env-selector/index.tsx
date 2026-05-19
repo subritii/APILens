@@ -14,15 +14,6 @@ interface Props {
   onDeleteEnvironment: (id: string) => void
 }
 
-function GlobeIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="12" r="10" /><line x1="2" y1="12" x2="22" y2="12" />
-      <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
-    </svg>
-  )
-}
-
 function GearIcon() {
   return (
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -114,7 +105,7 @@ export function EnvSelector({
     <>
       {/* ── Header controls ── */}
       <div className="flex items-center gap-1.5">
-        <span className="text-zinc-400"><GlobeIcon /></span>
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Env</span>
 
         {/* Dropdown with env-color left border */}
         <div

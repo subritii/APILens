@@ -5,8 +5,15 @@ import type { ValidationIssue } from '../proxy/validate'
 
 const ajv = new Ajv({ allErrors: true, strict: false })
 addFormats(ajv)
-for (const kw of ['discriminator', 'readOnly', 'writeOnly', 'xml', 'externalDocs', 'example']) {
-  try { ajv.addKeyword(kw) } catch { /* already registered */ }
+
+// Form-encoded bodies arrive as strings; coerceTypes converts "2000" → 2000 so number schemas pass.
+const ajvCoerce = new Ajv({ allErrors: true, strict: false, coerceTypes: true })
+addFormats(ajvCoerce)
+
+for (const instance of [ajv, ajvCoerce]) {
+  for (const kw of ['discriminator', 'readOnly', 'writeOnly', 'xml', 'externalDocs', 'example']) {
+    try { instance.addKeyword(kw) } catch { /* already registered */ }
+  }
 }
 
 // OpenAPI 3.0 uses `nullable: true` which isn't valid JSON Schema.
@@ -34,6 +41,24 @@ function toJsonSchema(schema: unknown): unknown {
   return s
 }
 
+// Parse application/x-www-form-urlencoded body string into a plain object for AJV.
+// Handles bracket array notation: payment_method_types[]=card → { payment_method_types: ['card'] }
+function parseFormBody(str: string): Record<string, string | string[]> {
+  const out: Record<string, string | string[]> = {}
+  for (const [rawKey, value] of new URLSearchParams(str)) {
+    const isBracket = rawKey.endsWith('[]')
+    const key = isBracket ? rawKey.slice(0, -2) : rawKey
+    if (key in out) {
+      const existing = out[key]
+      out[key] = Array.isArray(existing) ? [...existing, value] : [existing, value]
+    } else {
+      // [] suffix signals array intent even for a single value.
+      out[key] = isBracket ? [value] : value
+    }
+  }
+  return out
+}
+
 // Convert "/users/{id}/posts/{postId}" → regex that matches "/users/123/posts/456"
 function pathToRegex(template: string): RegExp {
   const pattern = template
@@ -55,9 +80,10 @@ function findOperation(doc: OpenAPI.Document, method: string, pathname: string) 
   return null
 }
 
-function runAjv(schema: unknown, data: unknown): string[] {
+function runAjv(schema: unknown, data: unknown, coerce = false): string[] {
   try {
-    const validate = ajv.compile(toJsonSchema(schema) as object)
+    const instance = coerce ? ajvCoerce : ajv
+    const validate = instance.compile(toJsonSchema(schema) as object)
     if (validate(data)) return []
     return (validate.errors ?? []).map(e =>
       `${e.instancePath || '(root)'} ${e.message}`
@@ -89,6 +115,7 @@ export function validateRequestAgainstSpec(
   method: string,
   url: string,
   body: unknown,
+  headers: Record<string, string> = {},
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = []
 
@@ -104,14 +131,22 @@ export function validateRequestAgainstSpec(
     return issues
   }
 
+  const effectiveCt = Object.entries(headers)
+    .find(([k]) => k.toLowerCase() === 'content-type')?.[1]?.toLowerCase() ?? ''
+  const isFormEncoded = effectiveCt.includes('x-www-form-urlencoded')
+
   const requestBody = operation.requestBody as OpenAPIV3.RequestBodyObject | undefined
   const content = requestBody?.content ?? {}
-  // Try JSON first, then form-encoded (Stripe uses application/x-www-form-urlencoded)
-  const schema = content['application/json']?.schema
-    ?? content['application/x-www-form-urlencoded']?.schema
+  // Prefer the schema matching the actual Content-Type; fall back to whichever is defined.
+  const schema = isFormEncoded
+    ? (content['application/x-www-form-urlencoded']?.schema ?? content['application/json']?.schema)
+    : (content['application/json']?.schema ?? content['application/x-www-form-urlencoded']?.schema)
 
-  if (schema && body !== undefined) {
-    const errors = runAjv(schema, body)
+  // Form-encoded bodies arrive as raw strings — parse into an object before AJV sees them.
+  const bodyToValidate = isFormEncoded && typeof body === 'string' ? parseFormBody(body) : body
+
+  if (schema && bodyToValidate !== undefined) {
+    const errors = runAjv(schema, bodyToValidate, isFormEncoded)
     for (const msg of errors) {
       issues.push({ code: 'SPEC_REQUEST_INVALID', severity: 'error', message: `Request body — ${msg}.` })
     }
